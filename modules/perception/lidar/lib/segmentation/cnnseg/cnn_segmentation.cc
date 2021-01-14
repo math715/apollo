@@ -13,18 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *****************************************************************************/
+#include "modules/perception/lidar/lib/segmentation/cnnseg/cnn_segmentation.h"
+
 #include <map>
+
+#include "modules/perception/lidar/lib/segmentation/cnnseg/proto/cnnseg_config.pb.h"
 
 #include "cyber/common/file.h"
 #include "cyber/common/log.h"
-
 #include "modules/perception/base/object_pool_types.h"
 #include "modules/perception/inference/inference_factory.h"
 #include "modules/perception/lib/config_manager/config_manager.h"
 #include "modules/perception/lidar/common/lidar_point_label.h"
 #include "modules/perception/lidar/common/lidar_timer.h"
-#include "modules/perception/lidar/lib/segmentation/cnnseg/cnn_segmentation.h"
-#include "modules/perception/lidar/lib/segmentation/cnnseg/proto/cnnseg_config.pb.h"
 #include "modules/perception/lidar/lib/segmentation/cnnseg/util.h"
 #include "modules/perception/lidar/lib/segmentation/ncut/ncut_segmentation.h"
 
@@ -45,16 +46,16 @@ bool CNNSegmentation::Init(const SegmentationInitOptions& options) {
   std::string weight_file;
   std::string engine_file;
   sensor_name_ = options.sensor_name;
-  CHECK(GetConfigs(&param_file, &proto_file, &weight_file, &engine_file));
+  ACHECK(GetConfigs(&param_file, &proto_file, &weight_file, &engine_file));
   AINFO << "--    param_file: " << param_file;
   AINFO << "--    proto_file: " << proto_file;
   AINFO << "--    weight_file: " << weight_file;
   AINFO << "--    engine_file: " << engine_file;
 
   // get cnnseg params
-  CHECK(GetProtoFromFile(param_file, &cnnseg_param_))
+  ACHECK(GetProtoFromFile(param_file, &cnnseg_param_))
       << "Failed to parse CNNSegParam config file." << param_file;
-  CHECK(GetProtoFromFile(engine_file, &spp_engine_config_))
+  ACHECK(GetProtoFromFile(engine_file, &spp_engine_config_))
       << "Failed to parse SppEngine config file." << engine_file;
 
   // init feature parameters
@@ -94,7 +95,7 @@ bool CNNSegmentation::Init(const SegmentationInitOptions& options) {
   if (!feature_param.use_constant_feature()) {
     input_shape[1] -= 2;
   }
-  CHECK(inference_->Init(input_shapes)) << "Failed to init inference.";
+  ACHECK(inference_->Init(input_shapes)) << "Failed to init inference.";
 
   // init blobs
   instance_pt_blob_ = inference_->get_blob(network_param.instance_pt_blob());
@@ -119,13 +120,13 @@ bool CNNSegmentation::Init(const SegmentationInitOptions& options) {
 
   // init feature generator
   feature_generator_.reset(new FeatureGenerator);
-  CHECK(feature_generator_->Init(feature_param, feature_blob_.get()))
+  ACHECK(feature_generator_->Init(feature_param, feature_blob_.get()))
       << "Failed to init feature generator.";
 
   point2grid_.reserve(kDefaultPointCloudSize);
 
   // init cluster and background segmentation methods
-  CHECK(InitClusterAndBackgroundSegmentation());
+  ACHECK(InitClusterAndBackgroundSegmentation());
 
   // secondary segmentor
   /*if (cnnseg_param_.fill_recall_with_ncut()) {
@@ -140,19 +141,19 @@ bool CNNSegmentation::Init(const SegmentationInitOptions& options) {
 
 bool CNNSegmentation::InitClusterAndBackgroundSegmentation() {
   // init ground detector
-  ground_detector_.reset(BaseGroundDetectorRegisterer::GetInstanceByName(
-      cnnseg_param_.ground_detector()));
-  CHECK_NOTNULL(ground_detector_.get());
+  ground_detector_ = BaseGroundDetectorRegisterer::GetInstanceByName(
+      cnnseg_param_.ground_detector());
+  CHECK_NOTNULL(ground_detector_);
   GroundDetectorInitOptions ground_detector_init_options;
-  CHECK(ground_detector_->Init(ground_detector_init_options))
+  ACHECK(ground_detector_->Init(ground_detector_init_options))
       << "Failed to init ground detection.";
 
   // init roi filter
-  roi_filter_.reset(
-      BaseROIFilterRegisterer::GetInstanceByName(cnnseg_param_.roi_filter()));
-  CHECK_NOTNULL(roi_filter_.get());
+  roi_filter_ =
+      BaseROIFilterRegisterer::GetInstanceByName(cnnseg_param_.roi_filter());
+  CHECK_NOTNULL(roi_filter_);
   ROIFilterInitOptions roi_filter_init_options;
-  CHECK(roi_filter_->Init(roi_filter_init_options))
+  ACHECK(roi_filter_->Init(roi_filter_init_options))
       << "Failed to init roi filter.";
 
   // init spp engine
@@ -346,6 +347,9 @@ void CNNSegmentation::GetObjectsFromSppEngine(
   memcpy(&original_world_cloud_->mutable_points_height()->at(0),
          &original_cloud_->points_height().at(0),
          sizeof(float) * original_cloud_->size());
+  memcpy(&original_world_cloud_->mutable_points_label()->at(0),
+         &original_cloud_->points_label().at(0),
+         sizeof(uint8_t) * original_cloud_->size());
   if (cnnseg_param_.remove_ground_points()) {
     num_foreground = spp_engine_.RemoveGroundPointsInForegroundCluster(
         original_cloud_, lidar_frame_ref_->roi_indices,
@@ -379,7 +383,7 @@ void CNNSegmentation::GetObjectsFromSppEngine(
     object->lidar_supplement.num_points_in_roi = cluster->points_in_roi;
     object->lidar_supplement.on_use = true;
     object->lidar_supplement.is_background = false;
-    // CHECK(cluster->points.size() == cluster->point_ids.size())
+    // ACHECK(cluster->points.size() == cluster->point_ids.size())
     //  << "cluster points size: " << cluster->points.size()
     //  << "cluster point ids size: " << cluster->point_ids.size();
     object->lidar_supplement.cloud.CopyPointCloud(*original_cloud_,
@@ -460,12 +464,12 @@ bool CNNSegmentation::GetConfigs(std::string* param_file,
                                  std::string* engine_file) {
   auto config_manager = lib::ConfigManager::Instance();
   const lib::ModelConfig* model_config = nullptr;
-  CHECK(config_manager->GetModelConfig("CNNSegmentation", &model_config))
+  ACHECK(config_manager->GetModelConfig("CNNSegmentation", &model_config))
       << "Failed to get model config: CNNSegmentation";
 
   const std::string& work_root = config_manager->work_root();
   std::string root_path;
-  CHECK(model_config->get_value("root_path", &root_path))
+  ACHECK(model_config->get_value("root_path", &root_path))
       << "Failed to get value of root_path.";
   std::string config_file;
   config_file = GetAbsolutePath(work_root, root_path);
@@ -473,17 +477,11 @@ bool CNNSegmentation::GetConfigs(std::string* param_file,
   config_file = GetAbsolutePath(config_file, "cnnseg.conf");
 
   CNNSegConfig config;
-  CHECK(apollo::cyber::common::GetProtoFromFile(config_file, &config))
+  ACHECK(apollo::cyber::common::GetProtoFromFile(config_file, &config))
       << "Failed to parse CNNSeg config file";
-  if (config.use_paddle()) {
-    *proto_file = GetAbsolutePath(work_root, config.paddle_proto_file());
-    *weight_file = GetAbsolutePath(work_root, config.paddle_weight_file());
-    *param_file = GetAbsolutePath(work_root, config.paddle_param_file());
-  } else {
-    *proto_file = GetAbsolutePath(work_root, config.proto_file());
-    *weight_file = GetAbsolutePath(work_root, config.weight_file());
-    *param_file = GetAbsolutePath(work_root, config.param_file());
-  }
+  *proto_file = GetAbsolutePath(work_root, config.proto_file());
+  *weight_file = GetAbsolutePath(work_root, config.weight_file());
+  *param_file = GetAbsolutePath(work_root, config.param_file());
   *engine_file = GetAbsolutePath(work_root, config.engine_file());
 
   return true;

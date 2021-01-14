@@ -8,7 +8,7 @@ You are welcome to contribute to project Apollo. To contribute to apollo, you ha
 ### How do I start contributing
 
 * You can follow the standard [Github approach](https://help.github.com/articles/using-pull-requests/) to contribute code.
-* There are [issues with label "help wanted"](https://github.com/ApolloAuto/apollo/labels/help%20wanted) that are best to help you get started.
+* There are [issues with label "help wanted"](https://github.com/ApolloAuto/apollo/issues?utf8=%E2%9C%93&q=label%3A%22Type%3A+Help+wanted%22+) that are best to help you get started.
 * If you are currently working on an issue, leave a message to let people know that you are working on it.
 * Before sending in your pull request for
 [review](https://github.com/ApolloAuto/apollo/pulls),
@@ -38,11 +38,9 @@ You can use command `bash apollo.sh test` to run all unit tests.
 
 * **Python coding style**:  Apollo adopted the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html). You can use the  [yapf](https://github.com/google/yapf) command `yapf -i --style='{based_on_style: google}' foo.py` to format a file foo.py.
 
-* **Apollo best coding practice**: Please also refer to [Apollo Best Coding Practice](docs/technical_tutorial/best_coding_practice.md) for more coding practice disciplines.
+* **Apollo best coding practice**: Please also refer to [Apollo Best Coding Practice](docs/technical_tutorial/apollo_best_coding_practice.md) for more coding practice disciplines.
 
 * **BUILD coding style** : you can use command `bash apollo.sh buildify` to format your BUILD files before you submit.
-
-* **Best coding practice**: Follow [this guide](docs/technical_tutorial/best_coding_practice.md)
 
 #### Documentation
 

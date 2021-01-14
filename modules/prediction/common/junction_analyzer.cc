@@ -31,13 +31,6 @@ using apollo::hdmap::JunctionInfo;
 using apollo::hdmap::LaneInfo;
 using ConstLaneInfoPtr = std::shared_ptr<const LaneInfo>;
 
-std::shared_ptr<const JunctionInfo> JunctionAnalyzer::junction_info_ptr_;
-// Maps exit lane-id to JunctionExit info.
-std::unordered_map<std::string, JunctionExit> JunctionAnalyzer::junction_exits_;
-// Maps starting lane-id to JunctionFeature info.
-std::unordered_map<std::string, JunctionFeature>
-    JunctionAnalyzer::junction_features_;
-
 void JunctionAnalyzer::Init(const std::string& junction_id) {
   if (junction_info_ptr_ != nullptr &&
       junction_info_ptr_->id().id() == junction_id) {
@@ -90,7 +83,7 @@ void JunctionAnalyzer::SetAllJunctionExits() {
 std::vector<JunctionExit> JunctionAnalyzer::GetJunctionExits(
     const std::string& start_lane_id) {
   // TODO(hongyi) make this a gflag
-  int max_search_level = 5;
+  int max_search_level = 6;
 
   std::vector<JunctionExit> junction_exits;
   std::queue<std::pair<ConstLaneInfoPtr, int>> lane_info_queue;

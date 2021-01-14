@@ -44,12 +44,12 @@ bool FemPosDeviationOsqpInterface::Solve() {
     return false;
   }
 
-  // Calculate optimization states definitions
   if (ref_points_.size() > std::numeric_limits<int>::max()) {
     AERROR << "ref_points size too large, solver early terminates";
     return false;
   }
 
+  // Calculate optimization states definitions
   num_of_points_ = static_cast<int>(ref_points_.size());
   num_of_variables_ = num_of_points_ * 2;
   num_of_constraints_ = num_of_variables_;
@@ -147,7 +147,7 @@ void FemPosDeviationOsqpInterface::CalculateKernel(
   // |0,     0,       0,       0,       5X+2Y+Z, -2X-Y|
   // |0,     0,       0,       0,       0,       X+Y+Z|
 
-  // Only upper triangle is filled
+  // Only upper triangle needs to be filled
   std::vector<std::vector<std::pair<c_int, c_float>>> columns;
   columns.resize(num_of_variables_);
   int col_num = 0;
@@ -256,7 +256,7 @@ void FemPosDeviationOsqpInterface::CalculateAffineConstraint(
 
 void FemPosDeviationOsqpInterface::SetPrimalWarmStart(
     std::vector<c_float>* primal_warm_start) {
-  CHECK_EQ(ref_points_.size(), num_of_points_);
+  CHECK_EQ(ref_points_.size(), static_cast<size_t>(num_of_points_));
   for (const auto& ref_point_xy : ref_points_) {
     primal_warm_start->push_back(ref_point_xy.first);
     primal_warm_start->push_back(ref_point_xy.second);
@@ -284,6 +284,7 @@ bool FemPosDeviationOsqpInterface::OptimizeWithOsqp(
   data->u = upper_bounds->data();
 
   *work = osqp_setup(data, settings);
+  // osqp_setup(work, data, settings);
 
   osqp_warm_start_x(*work, primal_warm_start->data());
 

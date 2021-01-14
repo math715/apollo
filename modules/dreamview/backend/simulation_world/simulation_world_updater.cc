@@ -16,8 +16,9 @@
 
 #include "modules/dreamview/backend/simulation_world/simulation_world_updater.h"
 
-#include "cyber/common/file.h"
 #include "google/protobuf/util/json_util.h"
+
+#include "cyber/common/file.h"
 #include "modules/common/util/json_util.h"
 #include "modules/common/util/map_util.h"
 #include "modules/dreamview/backend/common/dreamview_gflags.h"
@@ -28,10 +29,15 @@ namespace dreamview {
 
 using apollo::common::monitor::MonitorMessageItem;
 using apollo::common::util::ContainsKey;
+using apollo::common::util::JsonUtil;
 using apollo::cyber::common::GetProtoFromASCIIFile;
+using apollo::cyber::common::SetProtoToASCIIFile;
+using apollo::hdmap::DefaultRoutingFile;
 using apollo::hdmap::EndWayPointFile;
 using apollo::relative_map::NavigationInfo;
 using apollo::routing::RoutingRequest;
+using apollo::task_manager::CycleRoutingTask;
+using apollo::task_manager::Task;
 
 using Json = nlohmann::json;
 using google::protobuf::util::JsonStringToMessage;
@@ -39,14 +45,18 @@ using google::protobuf::util::MessageToJsonString;
 
 SimulationWorldUpdater::SimulationWorldUpdater(
     WebSocketHandler *websocket, WebSocketHandler *map_ws,
-    SimControl *sim_control, const MapService *map_service,
-    DataCollectionMonitor *data_collection_monitor, bool routing_from_file)
+    WebSocketHandler *camera_ws, SimControl *sim_control,
+    const MapService *map_service,
+    DataCollectionMonitor *data_collection_monitor,
+    PerceptionCameraUpdater *perception_camera_updater, bool routing_from_file)
     : sim_world_service_(map_service, routing_from_file),
       map_service_(map_service),
       websocket_(websocket),
       map_ws_(map_ws),
+      camera_ws_(camera_ws),
       sim_control_(sim_control),
-      data_collection_monitor_(data_collection_monitor) {
+      data_collection_monitor_(data_collection_monitor),
+      perception_camera_updater_(perception_camera_updater) {
   RegisterMessageHandlers();
 }
 
@@ -156,6 +166,35 @@ void SimulationWorldUpdater::RegisterMessageHandlers() {
       });
 
   websocket_->RegisterMessageHandler(
+      "SendDefaultCycleRoutingRequest",
+      [this](const Json &json, WebSocketHandler::Connection *conn) {
+        auto task = std::make_shared<Task>();
+        auto *cycle_routing_task = task->mutable_cycle_routing_task();
+        auto *routing_request = cycle_routing_task->mutable_routing_request();
+        if (!ContainsKey(json, "cycleNumber") ||
+            !json.find("cycleNumber")->is_number()) {
+          AERROR << "Failed to prepare a cycle routing request: Invalid cycle "
+                    "number";
+          return;
+        }
+        bool succeed = ConstructRoutingRequest(json, routing_request);
+        if (succeed) {
+          cycle_routing_task->set_cycle_num(
+              static_cast<int>(json["cycleNumber"]));
+          task->set_task_name("cycle_routing_task");
+          task->set_task_type(apollo::task_manager::TaskType::CYCLE_ROUTING);
+          sim_world_service_.PublishTask(task);
+          AINFO << "The task is : " << task->DebugString();
+          sim_world_service_.PublishMonitorMessage(
+              MonitorMessageItem::INFO, "Default cycle routing request sent.");
+        } else {
+          sim_world_service_.PublishMonitorMessage(
+              MonitorMessageItem::ERROR,
+              "Failed to send a default cycle routing request.");
+        }
+      });
+
+  websocket_->RegisterMessageHandler(
       "RequestSimulationWorld",
       [this](const Json &json, WebSocketHandler::Connection *conn) {
         if (!sim_world_service_.ReadyToPush()) {
@@ -204,7 +243,12 @@ void SimulationWorldUpdater::RegisterMessageHandlers() {
           for (const auto &landmark : poi_.landmark()) {
             Json place;
             place["name"] = landmark.name();
-            place["parkingSpaceId"] = landmark.parking_space_id();
+
+            Json parking_info =
+                apollo::common::util::JsonUtil::ProtoToTypedJson(
+                    "parkingInfo", landmark.parking_info());
+            place["parkingInfo"] = parking_info["data"];
+
             Json waypoint_list;
             for (const auto &waypoint : landmark.waypoint()) {
               Json point;
@@ -213,6 +257,7 @@ void SimulationWorldUpdater::RegisterMessageHandlers() {
               waypoint_list.push_back(point);
             }
             place["waypoint"] = waypoint_list;
+
             poi_list.push_back(place);
           }
         } else {
@@ -223,6 +268,42 @@ void SimulationWorldUpdater::RegisterMessageHandlers() {
                                                        EndWayPointFile());
         }
         response["poi"] = poi_list;
+        websocket_->SendData(conn, response.dump());
+      });
+
+  websocket_->RegisterMessageHandler(
+      "GetDefaultRoutings",
+      [this](const Json &json, WebSocketHandler::Connection *conn) {
+        Json response;
+        response["type"] = "DefaultRoutings";
+        response["threshold"] =
+            FLAGS_loop_routing_end_to_start_distance_threshold;
+
+        Json default_routing_list = Json::array();
+        if (LoadDefaultRoutings()) {
+          for (const auto &defaultrouting :
+               default_routings_.defaultrouting()) {
+            Json drouting;
+            drouting["name"] = defaultrouting.name();
+            Json point_list;
+            for (const auto &point : defaultrouting.point()) {
+              Json point_json;
+              point_json["x"] = point.x();
+              point_json["y"] = point.y();
+              point_list.push_back(point_json);
+            }
+            drouting["point"] = point_list;
+            default_routing_list.push_back(drouting);
+          }
+        } else {
+          sim_world_service_.PublishMonitorMessage(
+              MonitorMessageItem::ERROR,
+              "Failed to load default "
+              "routing. Please make sure the "
+              "file exists at " +
+                  DefaultRoutingFile());
+        }
+        response["defaultRoutings"] = default_routing_list;
         websocket_->SendData(conn, response.dump());
       });
 
@@ -260,6 +341,36 @@ void SimulationWorldUpdater::RegisterMessageHandlers() {
         response["type"] = "DataCollectionProgress";
         response["data"] = data_collection_monitor_->GetProgressAsJson();
         websocket_->SendData(conn, response.dump());
+      });
+
+  websocket_->RegisterMessageHandler(
+      "SaveDefaultRouting",
+      [this](const Json &json, WebSocketHandler::Connection *conn) {
+        bool succeed = AddDefaultRouting(json);
+        if (succeed) {
+          sim_world_service_.PublishMonitorMessage(
+              MonitorMessageItem::INFO, "Successfully add default routing.");
+          if (!default_routing_) {
+            AERROR << "Failed to add a default routing" << std::endl;
+          }
+          Json response = JsonUtil::ProtoToTypedJson("AddDefaultRoutingPath",
+                                                     *default_routing_);
+          websocket_->SendData(conn, response.dump());
+        } else {
+          sim_world_service_.PublishMonitorMessage(
+              MonitorMessageItem::ERROR, "Failed to add a default routing.");
+        }
+      });
+
+  camera_ws_->RegisterMessageHandler(
+      "RequestCameraData",
+      [this](const Json &json, WebSocketHandler::Connection *conn) {
+        if (!perception_camera_updater_->IsEnabled()) {
+          return;
+        }
+        std::string to_send;
+        perception_camera_updater_->GetUpdate(&to_send);
+        camera_ws_->SendBinaryData(conn, to_send, true);
       });
 }
 
@@ -352,11 +463,15 @@ bool SimulationWorldUpdater::ConstructRoutingRequest(
     return false;
   }
 
-  // set parking space
-  if (ContainsKey(json, "parkingSpaceId") &&
-      json.find("parkingSpaceId")->is_string()) {
-    routing_request->mutable_parking_space()->mutable_id()->set_id(
-        json["parkingSpaceId"]);
+  // set parking info
+  if (ContainsKey(json, "parkingInfo")) {
+    auto *requested_parking_info = routing_request->mutable_parking_info();
+    if (!JsonStringToMessage(json["parkingInfo"].dump(), requested_parking_info)
+             .ok()) {
+      AERROR << "Failed to prepare a routing request: invalid parking info."
+             << json["parkingInfo"].dump();
+      return false;
+    }
   }
 
   AINFO << "Constructed RoutingRequest to be sent:\n"
@@ -378,8 +493,8 @@ bool SimulationWorldUpdater::ValidateCoordinate(const nlohmann::json &json) {
 }
 
 void SimulationWorldUpdater::Start() {
-  timer_.reset(new cyber::Timer(kSimWorldTimeIntervalMs,
-                                [this]() { this->OnTimer(); }, false));
+  timer_.reset(new cyber::Timer(
+      kSimWorldTimeIntervalMs, [this]() { this->OnTimer(); }, false));
   timer_->Start();
 }
 
@@ -388,6 +503,8 @@ void SimulationWorldUpdater::OnTimer() {
 
   {
     boost::unique_lock<boost::shared_mutex> writer_lock(mutex_);
+    last_pushed_adc_timestamp_sec_ =
+        sim_world_service_.world().auto_driving_car().timestamp_sec();
     sim_world_service_.GetWireFormatString(
         FLAGS_sim_map_radius, &simulation_world_,
         &simulation_world_with_planning_data_);
@@ -403,6 +520,58 @@ bool SimulationWorldUpdater::LoadPOI() {
 
   AWARN << "Failed to load default list of POI from " << EndWayPointFile();
   return false;
+}
+
+bool SimulationWorldUpdater::LoadDefaultRoutings() {
+  if (GetProtoFromASCIIFile(DefaultRoutingFile(), &default_routings_)) {
+    return true;
+  }
+
+  AWARN << "Failed to load default routings of DefaultRoutings from "
+        << DefaultRoutingFile();
+  return false;
+}
+
+bool SimulationWorldUpdater::AddDefaultRouting(const Json &json) {
+  if (!ContainsKey(json, "name")) {
+    AERROR << "Failed to save a default routing: routing name not found.";
+    return false;
+  }
+
+  if (!ContainsKey(json, "point")) {
+    AERROR << "Failed to save a default routing: default routing points not "
+              "found.";
+    return false;
+  }
+
+  std::string name = json["name"];
+  auto iter = json.find("point");
+  default_routing_ = default_routings_.add_defaultrouting();
+  default_routing_->clear_name();
+  default_routing_->clear_point();
+  default_routing_->set_name(name);
+  auto *waypoint = default_routing_->mutable_point();
+  if (iter != json.end() && iter->is_array()) {
+    for (size_t i = 0; i < iter->size(); ++i) {
+      auto &point = (*iter)[i];
+      auto *p = waypoint->Add();
+      if (!ValidateCoordinate(point)) {
+        AERROR << "Failed to save a default routing: invalid waypoint.";
+        return false;
+      }
+      p->set_x(static_cast<double>(point["x"]));
+      p->set_y(static_cast<double>(point["y"]));
+    }
+  }
+  AINFO << "Default Routing Points to be saved:\n";
+  std::string file_name = DefaultRoutingFile();
+  if (!SetProtoToASCIIFile(default_routings_, file_name)) {
+    AERROR << "Failed to set proto to ascii file " << file_name;
+    return false;
+  }
+  AINFO << "Success in setting proto to cycle_routing file" << file_name;
+
+  return true;
 }
 
 }  // namespace dreamview

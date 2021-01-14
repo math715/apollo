@@ -139,8 +139,6 @@ void PolygonScanCvter<T>::Init(const Polygon& polygon) {
   is_singular_.resize(2);
   segments_.resize(2);
   ks_.resize(2);
-  ParsePolygon(DirectionMajor::XMAJOR);
-  ParsePolygon(DirectionMajor::YMAJOR);
 }
 
 template <typename T>
@@ -197,7 +195,7 @@ void PolygonScanCvter<T>::ScanCvt(const T& scan_loc, DirectionMajor dir_major,
       }
     }
   }
-  CHECK_EQ(nodes.size() % 2, 0);
+  CHECK_EQ(nodes.size() % 2, static_cast<size_t>(0));
   std::sort(nodes.begin(), nodes.end());
   for (size_t i = 0; i < nodes.size(); i += 2) {
     scan_intervals->push_back(IntervalOut(nodes[i], nodes[i + 1]));
@@ -240,7 +238,7 @@ void PolygonScanCvter<T>::ScansCvt(
   }
   // sort
   std::sort(aet_.second.begin(), aet_.second.end());
-  CHECK_EQ(aet_.second.size() & 1, 0);
+  CHECK_EQ(aet_.second.size() & 1, static_cast<size_t>(0));
 
   // add aet to result
   for (size_t i = 0; i < aet_.second.size(); i += 2) {
@@ -264,19 +262,18 @@ void PolygonScanCvter<T>::ScansCvt(
   }
 }
 
-// note, there exits problem when input T=double
 template <typename T>
 void PolygonScanCvter<T>::DisturbPolygon(const DirectionMajor dir_major) {
   for (auto& pt : polygon_disturbed_) {
-    double& x = pt[dir_major];
+    T& x = pt[dir_major];
     double d_x = (x - bottom_x_) / step_;
     int int_d_x = static_cast<int>(std::round(d_x));
     double delta_x = d_x - int_d_x;
     if (std::abs(delta_x) < s_epsilon_) {
       if (delta_x > 0) {
-        x = (int_d_x + s_epsilon_) * step_ + bottom_x_;
+        x = static_cast<T>((int_d_x + s_epsilon_) * step_ + bottom_x_);
       } else {
-        x = (int_d_x - s_epsilon_) * step_ + bottom_x_;
+        x = static_cast<T>((int_d_x - s_epsilon_) * step_ + bottom_x_);
       }
     }
   }
@@ -307,7 +304,6 @@ void PolygonScanCvter<T>::ParsePolygon(const DirectionMajor dir_major,
         polygon_disturbed_[(i + vertices_size - 1) % vertices_size];
     const Point& vertex = polygon_disturbed_[i];
     const Point& nex_vertex = polygon_disturbed_[(i + 1) % vertices_size];
-    // TODO(..) maybe confused, is not reasonable
     T pre_x = pre_vertex[dir_major];
     T x = vertex[dir_major];
     T y = vertex[op_dir_major];
@@ -316,19 +312,19 @@ void PolygonScanCvter<T>::ParsePolygon(const DirectionMajor dir_major,
 
     // get segment
     Segment line_seg(vertex, nex_vertex);
-    double x_diff = (nex_x - x);
-    double y_diff = (nex_y - y);
+    double x_diff = nex_x - x;
+    double y_diff = nex_y - y;
 
     // get k
     segments.push_back(line_seg);
-    std::abs(x - nex_x) < s_epsilon_ ? ks.push_back(s_inf_)
-                                     : ks.push_back(y_diff / x_diff);
-    double pre_x_diff = (pre_x - x);
+    std::abs(x_diff) < s_epsilon_ ? ks.push_back(s_inf_)
+                                  : ks.push_back(y_diff / x_diff);
+    double pre_x_diff = pre_x - x;
 
     // get singular property
     // ensure fill edge
     // case for zero
-    if (std::abs(x - nex_x) < s_epsilon_ || std::abs(pre_x_diff) < s_epsilon_) {
+    if (std::abs(x_diff) < s_epsilon_ || std::abs(pre_x_diff) < s_epsilon_) {
       is_singular.push_back(true);
     } else {
       pre_x_diff* x_diff > 0 ? is_singular.push_back(true)
@@ -410,7 +406,7 @@ void PolygonScanCvter<T>::UpdateAet(std::vector<IntervalOut>* scan_intervals) {
       scan_intervals->push_back(IntervalOut(edge.y, edge.max_y));
     }
   }
-  CHECK_EQ(valid_edges_num & 1, 0)
+  CHECK_EQ(valid_edges_num & 1, static_cast<size_t>(0))
       << boost::format(
              "valid edges num: %d x: %lf bottom_x: %lf \n vertices num: %d "
              "\n") %
@@ -476,7 +472,7 @@ bool PolygonScanCvter<T>::ConvertSegment(const size_t seg_id,
   edge.min_y = edge.y;
 
   // save top edge
-  if (x_id >= scans_size_) {
+  if (static_cast<size_t>(x_id) >= scans_size_) {
     std::pair<double, double> seg(low_vertex[op_dir_major_],
                                   high_vertex[op_dir_major_]);
     top_segments_.push_back(seg);

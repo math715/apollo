@@ -22,15 +22,21 @@ DECLARE_bool(enable_adapter_dump);
 DECLARE_string(gps_topic);
 DECLARE_string(imu_topic);
 DECLARE_string(raw_imu_topic);
+DECLARE_string(audio_detection_topic);
 DECLARE_string(chassis_topic);
 DECLARE_string(chassis_detail_topic);
 DECLARE_string(localization_topic);
+DECLARE_string(planning_learning_data_topic);
 DECLARE_string(planning_trajectory_topic);
 DECLARE_string(planning_pad_topic);
 DECLARE_string(monitor_topic);
 DECLARE_string(pad_topic);
 DECLARE_string(control_command_topic);
+DECLARE_string(control_preprocessor_topic);
+DECLARE_string(control_local_view_topic);
+DECLARE_string(control_core_command_topic);
 DECLARE_string(pointcloud_topic);
+DECLARE_string(pointcloud_16_topic);
 DECLARE_string(pointcloud_16_front_up_topic);
 DECLARE_string(pointcloud_64_topic);
 DECLARE_string(pointcloud_128_topic);
@@ -46,6 +52,7 @@ DECLARE_string(lidar_16_fusion_topic);
 DECLARE_string(lidar_16_fusion_compensator_topic);
 DECLARE_string(lidar_128_topic);
 DECLARE_string(prediction_topic);
+DECLARE_string(prediction_container_topic);
 DECLARE_string(perception_obstacle_topic);
 DECLARE_string(drive_event_topic);
 DECLARE_string(traffic_light_detection_topic);
@@ -60,6 +67,9 @@ DECLARE_string(gnss_status_topic);
 DECLARE_string(system_status_topic);
 DECLARE_string(static_info_topic);
 DECLARE_string(mobileye_topic);
+DECLARE_string(smartereye_obstacles_topic);
+DECLARE_string(smartereye_lanemark_topic);
+DECLARE_string(smartereye_image_topic);
 DECLARE_string(delphi_esr_topic);
 DECLARE_string(conti_radar_topic);
 DECLARE_string(racobit_radar_topic);
@@ -94,19 +104,19 @@ DECLARE_string(relative_map_topic);
 DECLARE_string(navigation_topic);
 DECLARE_string(hmi_status_topic);
 DECLARE_string(audio_capture_topic);
+DECLARE_string(v2x_obu_traffic_light_topic);
+DECLARE_string(v2x_internal_obstacle_topic);
 DECLARE_string(v2x_obstacle_topic);
-DECLARE_string(v2x_trafficlight_topic);
-// For pandora.
-DECLARE_string(pandora_pointcloud_topic);
-DECLARE_string(pandora_camera_front_color_topic);
-DECLARE_string(pandora_camera_right_gray_topic);
-DECLARE_string(pandora_camera_left_gray_topic);
-DECLARE_string(pandora_camera_front_gray_topic);
-DECLARE_string(pandora_camera_back_gray_topic);
+DECLARE_string(v2x_traffic_light_topic);
+DECLARE_string(v2x_traffic_light_for_hmi_topic);
+DECLARE_string(v2x_rsi_topic);
+DECLARE_string(storytelling_topic);
 DECLARE_string(gnss_raw_data_topic);
 DECLARE_string(stream_status_topic);
 DECLARE_string(heading_topic);
 DECLARE_string(rtcm_data_topic);
+DECLARE_string(audio_event_topic);
+DECLARE_string(task_topic);
 
 // Guardian topic
 DECLARE_string(guardian_topic);
@@ -117,3 +127,8 @@ DECLARE_string(tf_static_topic);
 
 // Recorder status topic
 DECLARE_string(recorder_status_topic);
+
+// Latency recording topic
+DECLARE_string(latency_recording_topic);
+// Latency reporting topic
+DECLARE_string(latency_reporting_topic);

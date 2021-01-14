@@ -16,20 +16,24 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "boost/thread/locks.hpp"
-#include "boost/thread/shared_mutex.hpp"
+#include <boost/thread/locks.hpp>
+#include <boost/thread/shared_mutex.hpp>
 
 #include "cyber/cyber.h"
+#include "cyber/time/time.h"
+#include "modules/audio/proto/audio_event.pb.h"
 #include "modules/canbus/proto/chassis.pb.h"
 #include "modules/common/proto/drive_event.pb.h"
 #include "modules/control/proto/pad_msg.pb.h"
 #include "modules/dreamview/proto/hmi_config.pb.h"
 #include "modules/dreamview/proto/hmi_mode.pb.h"
 #include "modules/dreamview/proto/hmi_status.pb.h"
+#include "modules/localization/proto/localization.pb.h"
 
 /**
  * @namespace apollo::dreamview
@@ -58,6 +62,11 @@ class HMIWorker {
   inline void RegisterStatusUpdateHandler(StatusUpdateHandler handler) {
     status_update_handlers_.push_back(handler);
   }
+
+  // Submit an AudioEvent
+  void SubmitAudioEvent(const uint64_t event_time_ms, const int obstacle_id,
+                        const int audio_type, const int moving_result,
+                        const int audio_direction, const bool is_siren_on);
 
   // Submit a DriveEvent.
   void SubmitDriveEvent(const uint64_t event_time_ms,
@@ -91,14 +100,18 @@ class HMIWorker {
   void StartModule(const std::string& module) const;
   void StopModule(const std::string& module) const;
 
-  void RecordAudio(const std::string& data);
+  void ResetComponentStatusTimer();
+  void UpdateComponentStatus();
 
   const HMIConfig config_;
 
   // HMI status maintenance.
   HMIStatus status_;
+  std::atomic<double> last_status_received_s_;
+  bool monitor_timed_out_{true};
   HMIMode current_mode_;
   bool status_changed_ = false;
+  size_t last_status_fingerprint_{};
   bool stop_ = false;
   mutable boost::shared_mutex status_mutex_;
   std::future<void> thread_future_;
@@ -107,9 +120,12 @@ class HMIWorker {
   // Cyber members.
   std::shared_ptr<apollo::cyber::Node> node_;
   std::shared_ptr<cyber::Reader<apollo::canbus::Chassis>> chassis_reader_;
+  std::shared_ptr<cyber::Reader<apollo::localization::LocalizationEstimate>>
+      localization_reader_;
   std::shared_ptr<cyber::Writer<HMIStatus>> status_writer_;
-  std::shared_ptr<cyber::Writer<AudioCapture>> audio_capture_writer_;
   std::shared_ptr<cyber::Writer<apollo::control::PadMessage>> pad_writer_;
+  std::shared_ptr<cyber::Writer<apollo::audio::AudioEvent>>
+      audio_event_writer_;
   std::shared_ptr<cyber::Writer<apollo::common::DriveEvent>>
       drive_event_writer_;
 };

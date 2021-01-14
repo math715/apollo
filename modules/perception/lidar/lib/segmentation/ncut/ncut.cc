@@ -14,10 +14,12 @@
  * limitations under the License.
  *****************************************************************************/
 
-#include <omp.h>
+#include "modules/perception/lidar/lib/segmentation/ncut/ncut.h"
+
 #include <algorithm>
 #include <ctime>
 #include <functional>
+#include <limits>
 #include <queue>
 #include <stack>
 #include <string>
@@ -25,14 +27,11 @@
 #include <utility>
 #include <vector>
 
+#include <omp.h>
+
 #include "cyber/common/file.h"
 #include "cyber/common/log.h"
 #include "modules/perception/base/point_cloud_util.h"
-#include "modules/perception/lidar/lib/segmentation/ncut/ncut.h"
-/*#include "lib/graph_felzenszwalb/filter.h"
-#include "lib/graph_felzenszwalb/image.h"
-#include "lib/graph_felzenszwalb/misc.h"
-#include "lib/graph_felzenszwalb/segment_image.h"*/
 
 namespace apollo {
 namespace perception {
@@ -285,8 +284,8 @@ void NCut::GetPatchFeature(const MatrixXf &points, MatrixXf *features_in) {
     for (int r = 0; r < patch.rows; ++r) {
       for (int c = 0; c < patch.cols; ++c) {
         float val = patch.at<float>(r, c);
-        features.coeffRef(i, p++) =
-            static_cast<float>((isnan(val) || isinf(val)) ? 1.e-50 : val);
+        features.coeffRef(i, p++) = static_cast<float>(
+            (std::isnan(val) || std::isinf(val)) ? 1.e-50 : val);
         // features.coeffRef(i, p++) = patch.at<float>(r, c);
       }
     }
@@ -296,12 +295,12 @@ void NCut::GetPatchFeature(const MatrixXf &points, MatrixXf *features_in) {
 NCut::NcutBoundingBox NCut::ComputeClusterBoundingBox(
     const std::vector<int> &point_gids) {
   // ! Note: do not perform rotation, so just some intuitive guess
-  float x_max = -FLT_MAX;
-  float y_max = -FLT_MAX;
-  float z_max = -FLT_MAX;
-  float x_min = FLT_MAX;
-  float y_min = FLT_MAX;
-  float z_min = FLT_MAX;
+  float x_max = -std::numeric_limits<float>::max();
+  float y_max = -std::numeric_limits<float>::max();
+  float z_max = -std::numeric_limits<float>::max();
+  float x_min = std::numeric_limits<float>::max();
+  float y_min = std::numeric_limits<float>::max();
+  float z_min = std::numeric_limits<float>::max();
   for (size_t j = 0; j < point_gids.size(); ++j) {
     int pid = point_gids[j];
     x_min = std::min(x_min, (*_cloud_obstacles)[pid].x);
@@ -481,8 +480,8 @@ void NCut::ComputeSkeletonWeights(Eigen::MatrixXf *weights_in) {
   for (int i = 0; i < num_clusters; ++i) {
     weights.coeffRef(i, i) = 1.f;
     for (int j = i + 1; j < num_clusters; ++j) {
-      float dist_point = FLT_MAX;
-      float dist_feature = FLT_MAX;
+      float dist_point = std::numeric_limits<float>::max();
+      float dist_feature = std::numeric_limits<float>::max();
       ComputeSquaredSkeletonDistance(
           _cluster_skeleton_points[i], _cluster_skeleton_features[i],
           _cluster_skeleton_points[j], _cluster_skeleton_features[j],
@@ -523,7 +522,7 @@ float NCut::GetMinNcuts(const Eigen::MatrixXf &in_weights,
   int num_seg1 = 0;
   int num_seg2 = 0;
   float opt_split = 0.0;
-  float opt_cost = FLT_MAX;
+  float opt_cost = std::numeric_limits<float>::max();
   for (int i = 0; i < _num_cuts; ++i) {
     num_seg1 = 0;
     num_seg2 = 0;
@@ -663,7 +662,7 @@ bool NCut::ComputeSquaredSkeletonDistance(const Eigen::MatrixXf &in1_points,
   const int dim = static_cast<int>(in1_features.cols());
   int min_index1 = -1;
   int min_index2 = -1;
-  float min_dist = FLT_MAX;
+  float min_dist = std::numeric_limits<float>::max();
   for (int i = 0; i < num1; ++i) {
     for (int j = 0; j < num2; ++j) {
       const float diff_x =
@@ -737,7 +736,7 @@ void NCut::GetClustersPids(const std::vector<int> &cids,
 int NCut::GetComponentBoundingBox(const std::vector<int> &cluster_ids,
                                   NcutBoundingBox *box_in) {
   NcutBoundingBox &box = *box_in;
-  if (cluster_ids.size() == 0) {
+  if (cluster_ids.empty()) {
     return 0;
   }
   int cid = cluster_ids[0];
@@ -772,10 +771,10 @@ std::string NCut::GetPcRoughLabel(const base::PointFCloudPtr &cloud,
   if (cloud->size() < OBSTACLE_MINIMUM_NUM_POINTS) {
     return "unknown";
   }
-  float x_max = -FLT_MAX;
-  float y_max = -FLT_MAX;
-  float x_min = FLT_MAX;
-  float y_min = FLT_MAX;
+  float x_max = -std::numeric_limits<float>::max();
+  float y_max = -std::numeric_limits<float>::max();
+  float x_min = std::numeric_limits<float>::max();
+  float y_min = std::numeric_limits<float>::max();
   for (size_t i = 0; i < cloud->size(); ++i) {
     base::PointF pt = (*cloud)[i];
     x_min = std::min(x_min, pt.x);
@@ -809,12 +808,12 @@ std::string NCut::GetPcRoughLabel(const base::PointFCloudPtr &cloud,
 
 void NCut::GetSegmentRoughSize(const base::PointFCloudPtr &cloud, float *length,
                                float *width, float *height) {
-  float x_max = -FLT_MAX;
-  float y_max = -FLT_MAX;
-  float z_max = -FLT_MAX;
-  float x_min = FLT_MAX;
-  float y_min = FLT_MAX;
-  float z_min = FLT_MAX;
+  float x_max = -std::numeric_limits<float>::max();
+  float y_max = -std::numeric_limits<float>::max();
+  float z_max = -std::numeric_limits<float>::max();
+  float x_min = std::numeric_limits<float>::max();
+  float y_min = std::numeric_limits<float>::max();
+  float z_min = std::numeric_limits<float>::max();
   for (size_t i = 0; i < cloud->size(); ++i) {
     base::PointF pt = (*cloud)[i];
     x_min = std::min(x_min, pt.x);

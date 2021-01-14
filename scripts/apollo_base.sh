@@ -16,119 +16,21 @@
 # limitations under the License.
 ###############################################################################
 
-APOLLO_ROOT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+TOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source ${TOP_DIR}/scripts/apollo.bashrc
 
-BOLD='\033[1m'
-RED='\033[0;31m'
-GREEN='\033[32m'
-WHITE='\033[34m'
-YELLOW='\033[33m'
-NO_COLOR='\033[0m'
-
-function info() {
-  (>&2 echo -e "[${WHITE}${BOLD}INFO${NO_COLOR}] $*")
-}
-
-function error() {
-  (>&2 echo -e "[${RED}ERROR${NO_COLOR}] $*")
-}
-
-function warning() {
-  (>&2 echo -e "${YELLOW}[WARNING] $*${NO_COLOR}")
-}
-
-function ok() {
-  (>&2 echo -e "[${GREEN}${BOLD} OK ${NO_COLOR}] $*")
-}
-
-function print_delim() {
-  echo '============================'
-}
-
-function get_now() {
-  echo $(date +%s)
-}
-
-function print_time() {
-  END_TIME=$(get_now)
-  ELAPSED_TIME=$(echo "$END_TIME - $START_TIME" | bc -l)
-  MESSAGE="Took ${ELAPSED_TIME} seconds"
-  info "${MESSAGE}"
-}
-
-function success() {
-  print_delim
-  ok "$1"
-  print_time
-  print_delim
-}
-
-function fail() {
-  print_delim
-  error "$1"
-  print_time
-  print_delim
-  exit -1
-}
-
-function check_in_docker() {
-  if [ -f /.dockerenv ]; then
-    APOLLO_IN_DOCKER=true
-  else
-    APOLLO_IN_DOCKER=false
-  fi
-  export APOLLO_IN_DOCKER
-}
+HOST_ARCH="$(uname -m)"
 
 function set_lib_path() {
-  local PRELOAD="libcaffe2_gpu.so libopencv_core.so"
-  if [ "$1" == "CYBER_ONLY" ]; then
-    PRELOAD=""
-  fi
-  if [ "$RELEASE_DOCKER" == 1 ]; then
-    local CYBER_SETUP="/apollo/cyber/setup.bash"
-    if [ -e "${CYBER_SETUP}" ]; then
-      source "${CYBER_SETUP}"
-    fi
-    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apollo/lib:/usr/local/apollo/local_integ/lib
-    export LD_LIBRARY_PATH=/usr/local/adolc/lib64:$LD_LIBRARY_PATH
-    export LD_LIBRARY_PATH=/usr/local/Qt5.5.1/5.5/gcc_64/lib:$LD_LIBRARY_PATH
-    export LD_LIBRARY_PATH=/usr/local/fast-rtps/lib:$LD_LIBRARY_PATH
-    export LD_LIBRARY_PATH=/usr/local/apollo/libtorch/lib:$LD_LIBRARY_PATH
-    export LD_LIBRARY_PATH=/usr/local/apollo/libtorch_gpu/lib:$LD_LIBRARY_PATH
-    PY_LIB_PATH=/apollo/lib
-    PY_TOOLS_PATH=/apollo/modules/tools
-  else
-    local CYBER_SETUP="/apollo/cyber/setup.bash"
-    if [ -e "${CYBER_SETUP}" ]; then
-      source "${CYBER_SETUP}"
-    fi
-    PY_LIB_PATH=${APOLLO_ROOT_DIR}/py_proto
-    PY_TOOLS_PATH=${APOLLO_ROOT_DIR}/modules/tools
-    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apollo/lib:/apollo/bazel-genfiles/external/caffe/lib
-    export LD_LIBRARY_PATH=/usr/local/adolc/lib64:$LD_LIBRARY_PATH
-    export LD_LIBRARY_PATH=/apollo/third_party/rss/lib:$LD_LIBRARY_PATH
-    export LD_LIBRARY_PATH=/usr/local/apollo/libtorch/lib:$LD_LIBRARY_PATH
-    export LD_LIBRARY_PATH=/usr/local/apollo/libtorch_gpu/lib:$LD_LIBRARY_PATH
-  fi
-  export LD_PRELOAD="$PRELOAD"
-  export PYTHONPATH=/usr/local/lib/python2.7/dist-packages:${PY_LIB_PATH}:${PY_TOOLS_PATH}:${PYTHONPATH}
-  if [ -e /usr/local/cuda-8.0/ ];then
-    export PATH=/usr/local/cuda-8.0/bin:$PATH
-    export LD_LIBRARY_PATH=/usr/local/cuda-8.0/lib64:$LD_LIBRARY_PATH
-    export C_INCLUDE_PATH=/usr/local/cuda-8.0/include:$C_INCLUDE_PATH
-    export CPLUS_INCLUDE_PATH=/usr/local/cuda-8.0/include:$CPLUS_INCLUDE_PATH
-  fi
+  local CYBER_SETUP="${APOLLO_ROOT_DIR}/cyber/setup.bash"
+  [ -e "${CYBER_SETUP}" ] && . "${CYBER_SETUP}"
+  pathprepend ${APOLLO_ROOT_DIR}/modules/tools PYTHONPATH
+  pathprepend ${APOLLO_ROOT_DIR}/modules/teleop/common PYTHONPATH
+  pathprepend /apollo/modules/teleop/common/scripts
 }
 
 function create_data_dir() {
-  local DATA_DIR=""
-  if [ "$RELEASE_DOCKER" != "1" ];then
-    DATA_DIR="${APOLLO_ROOT_DIR}/data"
-  else
-    DATA_DIR="${HOME}/data"
-  fi
-
+  local DATA_DIR="${APOLLO_ROOT_DIR}/data"
   mkdir -p "${DATA_DIR}/log"
   mkdir -p "${DATA_DIR}/bag"
   mkdir -p "${DATA_DIR}/core"
@@ -142,75 +44,71 @@ function determine_bin_prefix() {
   export APOLLO_BIN_PREFIX
 }
 
-function find_device() {
-  # ${1} = device pattern
-  local device_list=$(find /dev -name "${1}")
-  if [ -z "${device_list}" ]; then
-    warning "Failed to find device with pattern \"${1}\" ..."
-  else
-    local devices=""
-    for device in $(find /dev -name "${1}"); do
-      ok "Found device: ${device}."
-      devices="${devices} --device ${device}:${device}"
-    done
-    echo "${devices}"
+function setup_device_for_aarch64() {
+  local can_dev="/dev/can0"
+  if [ ! -e "${can_dev}" ]; then
+    warning "No CAN device named ${can_dev}. "
+    return
+  fi
+
+  sudo ip link set can0 type can bitrate 500000
+  sudo ip link set can0 up
+}
+
+function setup_device_for_amd64() {
+  # setup CAN device
+  local NUM_PORTS=8
+  for i in $(seq 0 $((${NUM_PORTS} - 1))); do
+    if [[ -e /dev/can${i} ]]; then
+      continue
+    elif [[ -e /dev/zynq_can${i} ]]; then
+      # soft link if sensorbox exist
+      sudo ln -s /dev/zynq_can${i} /dev/can${i}
+    else
+      break
+      # sudo mknod --mode=a+rw /dev/can${i} c 52 ${i}
+    fi
+  done
+
+  # Check Nvidia device
+  if [[ ! -e /dev/nvidia0 ]]; then
+    warning "No device named /dev/nvidia0"
+  fi
+  if [[ ! -e /dev/nvidiactl ]]; then
+    warning "No device named /dev/nvidiactl"
+  fi
+  if [[ ! -e /dev/nvidia-uvm ]]; then
+    warning "No device named /dev/nvidia-uvm"
+  fi
+  if [[ ! -e /dev/nvidia-uvm-tools ]]; then
+    warning "No device named /dev/nvidia-uvm-tools"
+  fi
+  if [[ ! -e /dev/nvidia-modeset ]]; then
+    warning "No device named /dev/nvidia-modeset"
   fi
 }
 
 function setup_device() {
-  if [ $(uname -s) != "Linux" ]; then
-    echo "Not on Linux, skip mapping devices."
+  if [ "$(uname -s)" != "Linux" ]; then
+    info "Not on Linux, skip mapping devices."
     return
   fi
-
-  # setup CAN device
-  for INDEX in `seq 0 3`
-  do
-    # soft link if sensorbox exist
-    if [ -e /dev/zynq_can${INDEX} ] &&  [ ! -e /dev/can${INDEX} ]; then
-      sudo ln -s /dev/zynq_can${INDEX} /dev/can${INDEX}
-    fi
-    if [ ! -e /dev/can${INDEX} ]; then
-      sudo mknod --mode=a+rw /dev/can${INDEX} c 52 $INDEX
-    fi
-  done
-
-  MACHINE_ARCH=$(uname -m)
-  if [ "$MACHINE_ARCH" == 'aarch64' ]; then
-    sudo ip link set can0 type can bitrate 500000
-    sudo ip link set can0 up
-  fi
-
-  # setup nvidia device
-  sudo /sbin/modprobe nvidia
-  sudo /sbin/modprobe nvidia-uvm
-  if [ ! -e /dev/nvidia0 ];then
-    sudo mknod -m 666 /dev/nvidia0 c 195 0
-  fi
-  if [ ! -e /dev/nvidiactl ];then
-    sudo mknod -m 666 /dev/nvidiactl c 195 255
-  fi
-  if [ ! -e /dev/nvidia-uvm ];then
-    sudo mknod -m 666 /dev/nvidia-uvm c 243 0
-  fi
-  if [ ! -e /dev/nvidia-uvm-tools ];then
-    sudo mknod -m 666 /dev/nvidia-uvm-tools c 243 1
-  fi
-
-  if [ ! -e /dev/nvidia-uvm-tools ];then
-    sudo mknod -m 666 /dev/nvidia-uvm-tools c 243 1
+  if [[ "${HOST_ARCH}" == "x86_64" ]]; then
+    setup_device_for_amd64
+  else
+    setup_device_for_aarch64
   fi
 }
 
 function decide_task_dir() {
   # Try to find largest NVMe drive.
-  DISK="$(df | grep "^/dev/nvme" | sort -nr -k 4 | \
-      awk '{print substr($0, index($0, $6))}')"
+  DISK="$(df | grep "^/dev/nvme" | sort -nr -k 4 \
+    | awk '{print substr($0, index($0, $6))}')"
 
   # Try to find largest external drive.
   if [ -z "${DISK}" ]; then
-    DISK="$(df | grep "/media/${DOCKER_USER}" | sort -nr -k 4 | \
-        awk '{print substr($0, index($0, $6))}')"
+    DISK="$(df | grep "/media/${DOCKER_USER}" | sort -nr -k 4 \
+      | awk '{print substr($0, index($0, $6))}')"
   fi
 
   if [ -z "${DISK}" ]; then
@@ -232,7 +130,7 @@ function decide_task_dir() {
 function is_stopped_customized_path() {
   MODULE_PATH=$1
   MODULE=$2
-  NUM_PROCESSES="$(pgrep -c -f "modules/${MODULE_PATH}/launch/${MODULE}.launch")"
+  NUM_PROCESSES="$(pgrep -f "modules/${MODULE_PATH}/launch/${MODULE}.launch" | grep -cv '^1$')"
   if [ "${NUM_PROCESSES}" -eq 0 ]; then
     return 1
   else
@@ -247,7 +145,7 @@ function start_customized_path() {
 
   is_stopped_customized_path "${MODULE_PATH}" "${MODULE}"
   if [ $? -eq 1 ]; then
-    eval "nohup cyber_launch start /apollo/modules/${MODULE_PATH}/launch/${MODULE}.launch &"
+    eval "nohup cyber_launch start ${APOLLO_ROOT_DIR}/modules/${MODULE_PATH}/launch/${MODULE}.launch &"
     sleep 0.5
     is_stopped_customized_path "${MODULE_PATH}" "${MODULE}"
     if [ $? -eq 0 ]; then
@@ -315,7 +213,7 @@ function start_fe_customized_path() {
 
   is_stopped_customized_path "${MODULE_PATH}" "${MODULE}"
   if [ $? -eq 1 ]; then
-    eval "cyber_launch start /apollo/modules/${MODULE_PATH}/launch/${MODULE}.launch"
+    eval "cyber_launch start ${APOLLO_ROOT_DIR}/modules/${MODULE_PATH}/launch/${MODULE}.launch"
   else
     echo "Module ${MODULE} is already running - skipping."
     return 2
@@ -356,7 +254,7 @@ function stop_customized_path() {
     return
   fi
 
-  cyber_launch stop "/apollo/modules/${MODULE_PATH}/launch/${MODULE}.launch"
+  cyber_launch stop "${APOLLO_ROOT_DIR}/modules/${MODULE_PATH}/launch/${MODULE}.launch"
   if [ $? -eq 0 ]; then
     echo "Successfully stopped module ${MODULE}."
   else
@@ -372,7 +270,7 @@ function stop() {
 # Note: This 'help' function here will overwrite the bash builtin command 'help'.
 # TODO: add a command to query known modules.
 function help() {
-cat <<EOF
+  cat << EOF
 Invoke ". scripts/apollo_base.sh" within docker to add the following commands to the environment:
 Usage: COMMAND [<module_name>]
 
@@ -411,7 +309,7 @@ function run_customized_path() {
       ;;
     *)
       start_customized_path $module_path $module $cmd "$@"
-    ;;
+      ;;
   esac
 }
 
@@ -421,7 +319,7 @@ function record_bag_env_log() {
     TASK_ID=$(date +%Y-%m-%d-%H-%M)
   fi
 
-  git status >/dev/null 2>&1
+  git status > /dev/null 2>&1
   if [ $? -ne 0 ]; then
     echo "Not in Git repo, maybe because you are in release container."
     echo "Skip log environment."
@@ -430,8 +328,8 @@ function record_bag_env_log() {
 
   commit=$(git log -1)
   echo -e "Date:$(date)\n" >> Bag_Env_$TASK_ID.log
-  git branch | awk '/\*/ { print "current branch: " $2; }'  >> Bag_Env_$TASK_ID.log
-  echo -e "\nNewest commit:\n$commit"  >> Bag_Env_$TASK_ID.log
+  git branch | awk '/\*/ { print "current branch: " $2; }' >> Bag_Env_$TASK_ID.log
+  echo -e "\nNewest commit:\n$commit" >> Bag_Env_$TASK_ID.log
   echo -e "\ngit diff:" >> Bag_Env_$TASK_ID.log
   git diff >> Bag_Env_$TASK_ID.log
   echo -e "\n\n\n\n" >> Bag_Env_$TASK_ID.log
@@ -440,21 +338,18 @@ function record_bag_env_log() {
 }
 
 # run command_name module_name
-function run() {
+function run_module() {
   local module=$1
   shift
   run_customized_path $module $module "$@"
 }
 
-check_in_docker
+unset OMP_NUM_THREADS
+
 if [ $APOLLO_IN_DOCKER = "true" ]; then
-  CYBER_SETUP="/apollo/cyber/setup.bash"
-  if [ -e "${CYBER_SETUP}" ]; then
-    source "${CYBER_SETUP}"
-  fi
   create_data_dir
+  set_lib_path $1
   if [ -z $APOLLO_BASE_SOURCED ]; then
-    set_lib_path $1
     determine_bin_prefix
     export APOLLO_BASE_SOURCED=1
   fi

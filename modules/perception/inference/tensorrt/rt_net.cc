@@ -19,8 +19,11 @@
 #include <algorithm>
 #include <utility>
 
+#include "absl/strings/str_cat.h"
+
 #include "cyber/common/log.h"
 #include "modules/perception/inference/tensorrt/plugins/argmax_plugin.h"
+#include "modules/perception/inference/tensorrt/plugins/leakyReLU_plugin.h"
 #include "modules/perception/inference/tensorrt/plugins/slice_plugin.h"
 #include "modules/perception/inference/tensorrt/plugins/softmax_plugin.h"
 
@@ -66,7 +69,7 @@ void RTNet::addConvLayer(const LayerParameter &layer_param,
                          TensorModifyMap *tensor_modify_map) {
   ConvolutionParameter conv = layer_param.convolution_param();
   ConvParam param;
-  CHECK(ParserConvParam(conv, &param));
+  ACHECK(ParserConvParam(conv, &param));
   nvinfer1::IConvolutionLayer *convLayer = nullptr;
   int size = conv.num_output() * param.kernel_w * param.kernel_h *
              inputs[0]->getDimensions().d[0];
@@ -100,12 +103,12 @@ void RTNet::addConvLayer(const LayerParameter &layer_param,
   auto tmp_out_dims = convLayer->getOutput(0)->getDimensions();
   std::string dim_string = "input: ";
   for (int i = 0; i < 3; i++) {
-    dim_string +=
-        " " + std::to_string(convLayer->getInput(0)->getDimensions().d[i]);
+    absl::StrAppend(&dim_string, " ",
+                    convLayer->getInput(0)->getDimensions().d[i]);
   }
-  dim_string += " | output: ";
+  absl::StrAppend(&dim_string, " | output: ");
   for (int i = 0; i < 3; i++) {
-    dim_string += " " + std::to_string(tmp_out_dims.d[i]);
+    absl::StrAppend(&dim_string, " ", tmp_out_dims.d[i]);
   }
   AINFO << layer_param.name() << dim_string;
 #endif
@@ -143,26 +146,39 @@ void RTNet::addDeconvLayer(const LayerParameter &layer_param,
 #if LOAD_DEBUG
   std::string dim_string = "input: ";
   for (int i = 0; i < 3; i++) {
-    dim_string += " " + std::to_string(inputs[0]->getDimensions().d[i]);
+    absl::StrAppend(&dim_string, " ", inputs[0]->getDimensions().d[i]);
   }
-  dim_string += " | output: ";
+  absl::StrAppend(&dim_string, " | output: ");
   AINFO << layer_param.name() << dim_string;
 #endif
 }
 void RTNet::addActiveLayer(const LayerParameter &layer_param,
-                           nvinfer1::ITensor *const *inputs,
+                           nvinfer1::ITensor *const *inputs, int nbInputs,
                            nvinfer1::INetworkDefinition *net,
                            TensorMap *tensor_map,
                            TensorModifyMap *tensor_modify_map) {
-  nvinfer1::ActivationType type = nvinfer1::ActivationType::kSIGMOID;
-  auto pair = active_map.find(layer_param.type());
-  if (pair != active_map.end()) {
-    type = pair->second;
-  }
-  nvinfer1::IActivationLayer *reluLayer = net->addActivation(*inputs[0], type);
-  reluLayer->setName(layer_param.name().c_str());
+  if (layer_param.type() == "ReLU" &&
+      layer_param.relu_param().negative_slope() > 0.0f) {
+    std::shared_ptr<ReLUPlugin> relu_plugin;
+    relu_plugin.reset(
+        new ReLUPlugin(layer_param.relu_param(), inputs[0]->getDimensions()));
+    nvinfer1::IPluginLayer *ReLU_Layer =
+        net->addPlugin(inputs, nbInputs, *relu_plugin);
+    relu_plugins_.push_back(relu_plugin);
+    ReLU_Layer->setName(layer_param.name().c_str());
+    ConstructMap(layer_param, ReLU_Layer, tensor_map, tensor_modify_map);
+  } else {
+    nvinfer1::ActivationType type = nvinfer1::ActivationType::kSIGMOID;
+    auto pair = active_map.find(layer_param.type());
+    if (pair != active_map.end()) {
+      type = pair->second;
+    }
+    nvinfer1::IActivationLayer *reluLayer =
+        net->addActivation(*inputs[0], type);
+    reluLayer->setName(layer_param.name().c_str());
 
-  ConstructMap(layer_param, reluLayer, tensor_map, tensor_modify_map);
+    ConstructMap(layer_param, reluLayer, tensor_map, tensor_modify_map);
+  }
 }
 
 void RTNet::addConcatLayer(const LayerParameter &layer_param,
@@ -173,6 +189,9 @@ void RTNet::addConcatLayer(const LayerParameter &layer_param,
   ConcatParameter concat = layer_param.concat_param();
   nvinfer1::IConcatenationLayer *concatLayer =
       net->addConcatenation(inputs, nbInputs);
+  // tensorrt ignore the first channel(batch channel), so when load caffe
+  // model axis should -1
+  concatLayer->setAxis(concat.axis()-1);
   concatLayer->setName(layer_param.name().c_str());
   CHECK_EQ(nbInputs, layer_param.bottom_size());
 
@@ -181,7 +200,7 @@ void RTNet::addConcatLayer(const LayerParameter &layer_param,
   for (int i = 0; i < nbInputs; i++) {
     auto dim_tmp = inputs[i]->getDimensions();
     for (int i = 0; i < 3; i++) {
-      dim_string += " " + std::to_string(dim_tmp.d[i]);
+      absl::StrAppend(&dim_string, " ", dim_tmp.d[i]);
     }
     AINFO << layer_param.name() << ": " << layer_param.bottom(i) << " "
           << (*tensor_modify_map)[layer_param.bottom(i)] << " " << dim_string;
@@ -200,7 +219,7 @@ void RTNet::addPoolingLayer(const LayerParameter &layer_param,
       (pool.pool() == PoolingParameter_PoolMethod_MAX)
           ? nvinfer1::PoolingType::kMAX
           : nvinfer1::PoolingType::kAVERAGE;
-  CHECK(modify_pool_param(&pool));
+  ACHECK(modify_pool_param(&pool));
   nvinfer1::IPoolingLayer *poolLayer = net->addPooling(
       *inputs[0], pool_type,
       {static_cast<int>(pool.kernel_h()), static_cast<int>(pool.kernel_w())});
@@ -262,7 +281,7 @@ void RTNet::addScaleLayer(const LayerParameter &layer_param,
     lw[1] = loadLayerWeights(power_param.shift(), size);
     lw[2] = loadLayerWeights(power_param.power(), size);
   } else {
-    CHECK(weight_map->find(layer_param.name().c_str()) != weight_map->end());
+    ACHECK(weight_map->find(layer_param.name().c_str()) != weight_map->end());
     for (size_t i = 0; i < (*weight_map)[layer_param.name().c_str()].size();
          i++) {
       lw[i] = (*weight_map)[layer_param.name().c_str()][i];
@@ -353,14 +372,18 @@ void RTNet::addPermuteLayer(const LayerParameter &layer_param,
                             nvinfer1::INetworkDefinition *net,
                             TensorMap *tensor_map,
                             TensorModifyMap *tensor_modify_map) {
-  nvinfer1::IPluginLayer *permuteLayer;
-  nvinfer1::plugin::Quadruple permuteOrder;
-  CHECK_EQ(layer_param.permute_param().order_size(), 4);
-  for (int i = 0; i < 4; i++) {
-    permuteOrder.data[i] = layer_param.permute_param().order(i);
+  CHECK_LE(layer_param.permute_param().order_size(), nvinfer1::Dims::MAX_DIMS);
+  nvinfer1::IShuffleLayer *permuteLayer = net->addShuffle(*inputs[0]);
+  nvinfer1::Permutation permutation;
+
+  // For loading Caffe's permute param,
+  // e.g. Caffe: [0, 2, 1, 3] -> TensorRT: [1, 0, 2], omitting 1st dim N.
+  ACHECK(layer_param.permute_param().order(0) == 0);
+  for (int i = 1; i < layer_param.permute_param().order_size(); ++i) {
+    int order = layer_param.permute_param().order(i);
+    permutation.order[i - 1] = order - 1;
   }
-  nvinfer1::IPlugin *mplugin = createSSDPermutePlugin(permuteOrder);
-  permuteLayer = net->addPlugin(inputs, nbInputs, *mplugin);
+  permuteLayer->setFirstTranspose(permutation);
 
   permuteLayer->setName(layer_param.name().c_str());
   ConstructMap(layer_param, permuteLayer, tensor_map, tensor_modify_map);
@@ -409,7 +432,8 @@ void RTNet::addLayer(const LayerParameter &layer_param,
                    tensor_modify_map);
   } else if (layer_param.type() == "Sigmoid" || layer_param.type() == "TanH" ||
              layer_param.type() == "ReLU") {
-    addActiveLayer(layer_param, inputs, net, tensor_map, tensor_modify_map);
+    addActiveLayer(layer_param, inputs, nbInputs, net, tensor_map,
+                   tensor_modify_map);
   } else if (layer_param.type() == "Concat") {
     addConcatLayer(layer_param, inputs, nbInputs, net, tensor_map,
                    tensor_modify_map);
@@ -442,8 +466,6 @@ void RTNet::addLayer(const LayerParameter &layer_param,
   } else if (layer_param.type() == "ArgMax") {
     addArgmaxLayer(layer_param, inputs, nbInputs, net, tensor_map,
                    tensor_modify_map);
-  } else if (layer_param.type() == "Padding") {
-    addPaddingLayer(layer_param, inputs, net, tensor_map, tensor_modify_map);
   } else if (layer_param.type() == "Dropout") {
     AINFO << "skip dropout";
   } else if (layer_param.type() == "Power") {
@@ -588,14 +610,14 @@ void RTNet::init_blob(std::vector<std::string> *names) {
   for (auto name : *names) {
     int bindingIndex =
         engine->getBindingIndex(tensor_modify_map_[name].c_str());
-    CHECK_LT(bindingIndex, buffers_.size());
+    CHECK_LT(static_cast<size_t>(bindingIndex), buffers_.size());
     CHECK_GE(bindingIndex, 0);
     nvinfer1::DimsCHW dims = static_cast<nvinfer1::DimsCHW &&>(
         engine->getBindingDimensions(bindingIndex));
     int count = dims.c() * dims.h() * dims.w() * max_batch_size_;
     cudaMalloc(&buffers_[bindingIndex], count * sizeof(float));
     std::vector<int> shape;
-    CHECK(this->shape(name, &shape));
+    ACHECK(this->shape(name, &shape));
     std::shared_ptr<apollo::perception::base::Blob<float>> blob;
     blob.reset(new apollo::perception::base::Blob<float>(shape));
     blob->set_gpu_data(reinterpret_cast<float *>(buffers_[bindingIndex]));
@@ -696,7 +718,7 @@ void RTNet::parse_with_api(
              &weight_map_, network_, &tensor_map, &tensor_modify_map_);
   }
 
-  CHECK_NE(output_names_.size(), 0);
+  CHECK_NE(output_names_.size(), static_cast<size_t>(0));
   std::sort(output_names_.begin(), output_names_.end());
   auto last = std::unique(output_names_.begin(), output_names_.end());
   output_names_.erase(last, output_names_.end());

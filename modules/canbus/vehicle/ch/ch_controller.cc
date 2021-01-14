@@ -16,11 +16,12 @@
 
 #include "modules/canbus/vehicle/ch/ch_controller.h"
 
+#include "modules/common/proto/vehicle_signal.pb.h"
+
 #include "cyber/common/log.h"
+#include "cyber/time/time.h"
 #include "modules/canbus/vehicle/ch/ch_message_manager.h"
 #include "modules/canbus/vehicle/vehicle_controller.h"
-#include "modules/common/proto/vehicle_signal.pb.h"
-#include "modules/common/time/time.h"
 #include "modules/drivers/canbus/can_comm/can_sender.h"
 #include "modules/drivers/canbus/can_comm/protocol_data.h"
 
@@ -56,6 +57,7 @@ ErrorCode ChController::Init(
   }
 
   if (can_sender == nullptr) {
+    AERROR << "Canbus sender is null.";
     return ErrorCode::CANBUS_ERROR;
   }
   can_sender_ = can_sender;
@@ -246,6 +248,13 @@ Chassis ChController::chassis() {
         "CANBUS not ready, firmware error or emergency button pressed!");
   }
 
+  // 27 battery soc
+  if (chassis_detail.ch().has_ecu_status_2_516() &&
+      chassis_detail.ch().ecu_status_2_516().has_battery_soc()) {
+    chassis_.set_battery_soc_percentage(
+        chassis_detail.ch().ecu_status_2_516().battery_soc());
+  }
+
   return chassis_;
 }
 
@@ -408,7 +417,46 @@ void ChController::SetTurningSignal(const ControlCommand& command) {}
 
 void ChController::ResetProtocol() { message_manager_->ResetSendMessages(); }
 
-bool ChController::CheckChassisError() { return false; }
+bool ChController::CheckChassisError() {
+  ChassisDetail chassis_detail;
+  message_manager_->GetSensorData(&chassis_detail);
+  if (!chassis_detail.has_ch()) {
+    AERROR_EVERY(100) << "ChassisDetail has NO ch vehicle info."
+                      << chassis_detail.DebugString();
+    return false;
+  }
+  Ch ch = chassis_detail.ch();
+  // steer motor fault
+  if (ch.has_steer_status__512()) {
+    if (Steer_status__512::STEER_ERR_STEER_MOTOR_ERR ==
+        ch.steer_status__512().steer_err()) {
+      return true;
+    }
+    if (Steer_status__512::SENSOR_ERR_STEER_SENSOR_ERR ==
+        ch.steer_status__512().sensor_err()) {
+      return true;
+    }
+  }
+  // drive error
+  if (ch.has_throttle_status__510()) {
+    if (Throttle_status__510::DRIVE_MOTOR_ERR_DRV_MOTOR_ERR ==
+        ch.throttle_status__510().drive_motor_err()) {
+      return true;
+    }
+    if (Throttle_status__510::BATTERY_BMS_ERR_BATTERY_ERR ==
+        ch.throttle_status__510().battery_bms_err()) {
+      return true;
+    }
+  }
+  // brake error
+  if (ch.has_brake_status__511()) {
+    if (Brake_status__511::BRAKE_ERR_BRAKE_SYSTEM_ERR ==
+        ch.brake_status__511().brake_err()) {
+      return true;
+    }
+  }
+  return false;
+}
 
 void ChController::SecurityDogThreadFunc() {
   int32_t vertical_ctrl_fail = 0;
@@ -427,8 +475,7 @@ void ChController::SecurityDogThreadFunc() {
   int64_t start = 0;
   int64_t end = 0;
   while (can_sender_->IsRunning()) {
-    start = ::apollo::common::time::AsInt64<::apollo::common::time::micros>(
-        ::apollo::common::time::Clock::Now());
+    start = ::apollo::cyber::Time::Now().ToMicrosecond();
     const Chassis::DrivingMode mode = driving_mode();
     bool emergency_mode = false;
 
@@ -466,8 +513,7 @@ void ChController::SecurityDogThreadFunc() {
       set_driving_mode(Chassis::EMERGENCY_MODE);
       message_manager_->ResetSendMessages();
     }
-    end = ::apollo::common::time::AsInt64<::apollo::common::time::micros>(
-        ::apollo::common::time::Clock::Now());
+    end = ::apollo::cyber::Time::Now().ToMicrosecond();
     std::chrono::duration<double, std::micro> elapsed{end - start};
     if (elapsed < default_period) {
       std::this_thread::sleep_for(default_period - elapsed);

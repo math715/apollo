@@ -14,16 +14,20 @@
  * limitations under the License.
  *****************************************************************************/
 
-#include "modules/localization/msf/local_map/base_map/base_map.h"
+#include "modules/localization/msf/local_pyramid_map/base_map/base_map.h"
 
 #include <set>
 #include <string>
-#include "boost/filesystem.hpp"
+
+#include <boost/filesystem.hpp>
+
+#include "modules/localization/msf/common/util/base_map_cache.h"
 #include "modules/localization/msf/common/util/file_utility.h"
 
 namespace apollo {
 namespace localization {
 namespace msf {
+namespace pyramid_map {
 
 BaseMap::BaseMap(BaseMapConfig* config)
     : map_config_(config),
@@ -34,10 +38,16 @@ BaseMap::BaseMap(BaseMapConfig* config)
 BaseMap::~BaseMap() {}
 
 void BaseMap::InitMapNodeCaches(int cacheL1_size, int cahceL2_size) {
-  map_node_cache_lvl1_.reset(
-      new MapNodeCacheL1<MapNodeIndex, BaseMapNode>(cacheL1_size));
-  map_node_cache_lvl2_.reset(
-      new MapNodeCacheL2<MapNodeIndex, BaseMapNode>(cahceL2_size));
+  destroy_func_lvl1_ =
+      std::bind(MapNodeCache<MapNodeIndex, BaseMapNode>::CacheL1Destroy,
+                std::placeholders::_1);
+  destroy_func_lvl2_ =
+      std::bind(MapNodeCache<MapNodeIndex, BaseMapNode>::CacheL2Destroy,
+                std::placeholders::_1);
+  map_node_cache_lvl1_.reset(new MapNodeCache<MapNodeIndex, BaseMapNode>(
+      cacheL1_size, destroy_func_lvl1_));
+  map_node_cache_lvl2_.reset(new MapNodeCache<MapNodeIndex, BaseMapNode>(
+      cahceL2_size, destroy_func_lvl2_));
 }
 
 void BaseMap::AttachMapNodePool(BaseMapNodePool* map_node_pool) {
@@ -248,7 +258,6 @@ void BaseMap::LoadMapNodeThreadSafety(const MapNodeIndex& index,
   if (node_remove) {
     map_node_pool_->FreeMapNode(node_remove);
   }
-  return;
 }
 
 void BaseMap::PreloadMapArea(const Eigen::Vector3d& location,
@@ -380,7 +389,6 @@ void BaseMap::PreloadMapArea(const Eigen::Vector3d& location,
   }
 
   this->PreloadMapNodes(&map_ids);
-  return;
 }
 
 bool BaseMap::LoadMapArea(const Eigen::Vector3d& seed_pt3d,
@@ -516,7 +524,7 @@ void BaseMap::ComputeMd5ForAllMapNodes() {
   GetAllMapIndexAndPath();
   for (unsigned int i = 0; i < all_map_node_paths_.size(); ++i) {
     std::string path = map_config_->map_folder_path_ + all_map_node_paths_[i];
-    char md5[FileUtility::CHAR_MD5LENTH];
+    char md5[FileUtility::kCharMd5Lenth];
     FileUtility::ComputeFileMd5(path, md5);
     all_map_node_md5s_.push_back(md5);
   }
@@ -546,6 +554,7 @@ bool BaseMap::CheckMapStrictly() {
   return true;
 }
 
+}  // namespace pyramid_map
 }  // namespace msf
 }  // namespace localization
 }  // namespace apollo
